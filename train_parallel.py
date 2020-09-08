@@ -163,7 +163,7 @@ def train_pose_vel(model: torch.nn.Module, training_generator: DataLoader,
     """
 
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    drop_every_epochs = 2
+    drop_every_epochs = 1
     drop_rate = 0.9
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, drop_every_epochs,
                                                 drop_rate)  # drop_every_epochs epochs drop by drop_rate lr
@@ -174,7 +174,7 @@ def train_pose_vel(model: torch.nn.Module, training_generator: DataLoader,
                                                                                  + str(model.lstm_hidden_dim)
                                                                                  + "_ed_" + str(model.embedding_dim)
                                                                                  + "_nl_" + str(model.num_layers))
-        shutil.copyfile(f"{dir_path}/train.py", f"{folder_path}/train_parallel.py")
+        shutil.copyfile(f"{dir_path}/train_parallel.py", f"{folder_path}/train_parallel.py")
         shutil.copyfile(f"{dir_path}/model/model_cvae_parallel.py", f"{folder_path}/model_cvae_parallel.py")
     prev_epoch_loss = 0
     min_ade = 1e100
@@ -233,12 +233,13 @@ def train_pose_vel(model: torch.nn.Module, training_generator: DataLoader,
             loss_stdved = 0.5 * torch.sum(torch.cat(([prediction[i].stddev for i in range(12)])))
             epoch_loss_std += loss_stdved
 
-            info = "kl: {kl:0.2f} loss_nll {loss_nll:0.2f}, l2_d {l2_d:0.2f}".format(kl=epoch_loss_kl.detach().cpu().item() / num_processed,
-                                                                   loss_nll=epoch_loss_nll.detach().cpu().item() / num_processed,
-                                                                                l2_d = distance_loss)
+            info = "kl: {kl:0.4f} loss_nll {loss_nll:0.2f}," \
+                   " l2_d {l2_d:0.2f}".format(kl=epoch_loss_kl.detach().cpu().item() / num_processed,
+                                              loss_nll=epoch_loss_nll.detach().cpu().item() / num_processed,
+                                              l2_d=distance_loss)
             pbar.set_description(info)
-
-            loss = 0.2 * loss_nll + 1 * loss_stdved + kl + distance_loss
+            kl_weight = min((10*epoch+1)/100.0, 1.0)
+            loss = 0.01 * loss_nll + kl_weight * kl + 0.01 * loss_stdved + 0*distance_loss
 
             loss.backward()
 
@@ -303,10 +304,12 @@ def train_pose_vel(model: torch.nn.Module, training_generator: DataLoader,
                 nll = torch.mean(nll).item()
                 t_ade = sum(t_ade) / len(t_ade)
                 t_fde = sum(t_fde) / len(t_fde)
+
+                # TODO: calc during training
                 if writer is not None:
                     writer.add_scalar(f"train/ade", t_ade, epoch)
                     writer.add_scalar(f"train/fde", t_fde, epoch)
-                    writer.add_scalar(f"train/nll", nll, epoch)
+                    # writer.add_scalar(f"train/nll", nll, epoch)
             print("\t\t epoch {epoch} val ade {ade:0.4f}, val fde {fde:0.4f}"
                   " time taken {t:0.2f}".format(epoch=epoch, ade=ade,
                                                 t=time.time() - start,
@@ -379,15 +382,15 @@ if __name__ == "__main__":
                                             unzip=True)
 
     training_set = DatasetFromPkl("./processed_with_forces/", data_files=["eth_train.pkl"])
-    training_gen = DataLoader(training_set, batch_size=128, shuffle=True,
+    training_gen = DataLoader(training_set, batch_size=256, shuffle=True,
                               collate_fn=collate_fn)  # , num_workers=4
 
     test_set = DatasetFromPkl("./processed_with_forces/", data_files=["eth_test.pkl"])
     test_gen = DataLoader(test_set, batch_size=32, shuffle=True, collate_fn=collate_fn)  # , num_workers=10
     dev = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    print(dev)
+    print("starting training on ", dev)
 
-    net = CvaeFuture(lstm_hidden_dim=32, num_layers=1, bidir=False, dropout_p=0.0, num_modes=15).to(dev)
-    net.name += "_full_z_0std_15modes"
+    net = CvaeFuture(lstm_hidden_dim=64, num_layers=1, bidir=True, dropout_p=0.0, num_modes=30).to(dev)
+    net.name += "_woSTD_"
     train_pose_vel(net, training_gen, test_gen, num_epochs=300, device=dev, lr=0.005,
                    limit=1e100, logging=True)

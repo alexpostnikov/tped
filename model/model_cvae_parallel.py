@@ -111,8 +111,10 @@ class CvaeFuture(nn.Module):
                                            bidirectional=bidir,
                                            batch_first=True)
         self.action = nn.Linear(2, 12)
-        self.gru_prep = nn.Linear(2 * lstm_hidden_dim * self.dir_number + self.action.out_features + self.num_modes, 2 * lstm_hidden_dim * self.dir_number + self.action.out_features + self.num_modes)
-        self.gru = nn.GRUCell(2 * lstm_hidden_dim * self.dir_number + self.action.out_features + self.num_modes, num_modes * 2)
+        self.gru_prep = nn.Linear(2 * lstm_hidden_dim * self.dir_number + self.action.out_features + self.num_modes,
+                                  2*lstm_hidden_dim * self.dir_number + self.action.out_features + self.num_modes)
+        self.gru = nn.GRUCell(2 * lstm_hidden_dim * self.dir_number + self.action.out_features + self.num_modes,
+                              num_modes * 2)
 
         self.state = nn.Linear(2 * lstm_hidden_dim * self.dir_number, num_modes * 2)
         self.proj_p_to_log_pis = nn.Linear(lstm_hidden_dim * 2 * self.dir_number, num_modes)
@@ -120,7 +122,7 @@ class CvaeFuture(nn.Module):
         self.proj_to_GMM_mus = nn.Linear(num_modes * 2, num_modes * 2)
         self.proj_to_GMM_log_sigmas = nn.Linear(num_modes * 2, num_modes * 2)
         self.proj_to_GMM_corrs = nn.Linear(num_modes * 2, num_modes)
-
+        self.proj_z_to_log_pi = nn.Linear(num_modes, num_modes)
         self.dropout_p = dropout_p
 
     def project_to_gmm_params(self, tensor) -> (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor):
@@ -162,7 +164,8 @@ class CvaeFuture(nn.Module):
         lstm_out_poses, hid = self.node_hist_encoder_poses(poses)
         # lstm_out = self.bn1(lstm_out_vell + lstm_out_poses + lstm_out_acc)
         # lstm_out = self.ln1(F.dropout(self.ln1(lstm_out_vell + lstm_out_poses + lstm_out_acc), self.dropout_p))
-        lstm_out = F.dropout((lstm_out_vell + lstm_out_poses + lstm_out_acc), self.dropout_p)
+        # lstm_out = F.dropout((lstm_out_vell + lstm_out_poses + lstm_out_acc), self.dropout_p)
+        lstm_out = F.dropout((lstm_out_poses), self.dropout_p)
 
         y_e = None
         if train:
@@ -230,15 +233,14 @@ class CvaeFuture(nn.Module):
             h = torch.cat((x.reshape(bs, -1), y_e), dim=1)
             q_logits = F.dropout(self.proj_to_GMM_log_pis(h), self.dropout_p)
             q_distrib = D.Categorical(logits=q_logits)
-            # z = sample(q_distrib)
-            z = q_logits
+            z = sample(q_distrib)
+            # z = q_logits
             kl_separated = D.kl_divergence(q_distrib, p_distrib)
             # kl_lower_bounded = torch.clamp(, min=0.1, max=1e3)
             kl = torch.clamp(torch.sum(kl_separated), min=0.01, max=1e10)  # - torch.sum(q_distrib.entropy())
         else:
-            # z = sample(p_distrib)
-            z = p_logits
-        # z = p_logits
+            z = sample(p_distrib)
+            # z = p_logits
         return p_distrib, q_distrib, z, kl
 
     def decoder(self, z, encoded_history, current_state, train=False):
@@ -252,7 +254,9 @@ class CvaeFuture(nn.Module):
 
         current_state = current_state.unsqueeze(1)
         gauses = []
-        inp = F.dropout(torch.cat((encoded_history.reshape(bs, -1), a_0, z), dim=-1), self.dropout_p)
+        lp = to_one_hot(z, n_dims=self.num_modes).to(encoded_history.device)
+        lp = lp - torch.logsumexp(lp, dim=-1, keepdim=True)
+        inp = F.dropout(torch.cat((encoded_history.reshape(bs, -1), a_0, lp), dim=-1), self.dropout_p)
 
         for i in range(12):
             # h_state = self.ln4(self.gru(inp.reshape(bs, -1), state))
@@ -271,29 +275,31 @@ class CvaeFuture(nn.Module):
             variance = torch.clamp(torch.exp(log_sigmas).unsqueeze(2) ** 2, max=1e3, min=1e-3)
 
             m_diag = variance * torch.eye(2).to(variance.device)
+            m_diag += 1e-7 #num stab?
             sigma_xy = torch.clamp(torch.prod(torch.exp(log_sigmas), dim=-1), min=1e-3, max=1e3)
 
             if train:
                 # log_pis = z.reshape(bs, 1) * torch.ones(bs, self.num_modes).cuda()
-                # log_pis = to_one_hot(z, n_dims=self.num_modes).to(encoded_history.device)
-                log_pis = z
+                log_pis = to_one_hot(z, n_dims=self.num_modes).to(encoded_history.device)
+                # log_pis = z
 
             else:
-                # log_pis = to_one_hot(z, n_dims=self.num_modes).to(encoded_history.device)
-                log_pis = z
+                log_pis = to_one_hot(z, n_dims=self.num_modes).to(encoded_history.device)
+                # log_pis = z
 
             log_pis = log_pis - torch.logsumexp(log_pis, dim=-1, keepdim=True)
             mix = D.Categorical(logits=log_pis)
-            comp = D.MultivariateNormal(mus, m_diag)
+            scale_tril = torch.cholesky(m_diag.cpu()).to(z.device)
+            comp = D.MultivariateNormal(mus, scale_tril=scale_tril)
 
             gmm = D.MixtureSameFamily(mix, comp)
             t = (sigma_xy * corrs.squeeze()).reshape(-1, 1, 1)
             # cov_matrix = m_diag  # + anti_diag
             gauses.append(gmm)
-            a_t = gmm.sample()  # possible grad problems?
+            a_t = gmm.sample()  # TODO possible grad problems?
             a_tt = F.dropout(self.action(a_t.reshape(bs, -1)), self.dropout_p)
             state = h_state
-            input = self.gru_prep(torch.cat((encoded_history.reshape(bs, -1), a_tt, z), dim=-1))
+            input = self.gru_prep(torch.cat((encoded_history.reshape(bs, -1), a_tt, lp), dim=-1))
             inp = F.dropout(input, self.dropout_p)
         return gauses
 
