@@ -111,19 +111,46 @@ class CvaeFuture(nn.Module):
                                            bidirectional=bidir,
                                            batch_first=True)
         self.action = nn.Linear(2, 12)
+        self.dropout_p = dropout_p
         self.gru_prep = nn.Linear(2 * lstm_hidden_dim * self.dir_number + self.action.out_features + self.num_modes,
                                   2*lstm_hidden_dim * self.dir_number + self.action.out_features + self.num_modes)
         self.gru = nn.GRUCell(2 * lstm_hidden_dim * self.dir_number + self.action.out_features + self.num_modes,
                               num_modes * 2)
 
-        self.state = nn.Linear(2 * lstm_hidden_dim * self.dir_number, num_modes * 2)
-        self.proj_p_to_log_pis = nn.Linear(lstm_hidden_dim * 2 * self.dir_number, num_modes)
-        self.proj_to_GMM_log_pis = nn.Linear(lstm_hidden_dim * 3 * self.dir_number, num_modes)
-        self.proj_to_GMM_mus = nn.Linear(num_modes * 2, num_modes * 2)
-        self.proj_to_GMM_log_sigmas = nn.Linear(num_modes * 2, num_modes * 2)
+        # self.state = nn.Linear(2 * lstm_hidden_dim * self.dir_number, num_modes * 2)
+        layers = [nn.Linear(2 * lstm_hidden_dim * self.dir_number, 2 * lstm_hidden_dim * self.dir_number),
+                  nn.Dropout(self.dropout_p),
+                  nn.Sigmoid(),
+                  nn.Linear(2 * lstm_hidden_dim * self.dir_number, num_modes * 2)]
+        self.state = nn.Sequential(*layers)
+
+        # self.proj_p_to_log_pis = nn.Linear(lstm_hidden_dim * 2 * self.dir_number, num_modes)
+        layers = [nn.Linear(2 * lstm_hidden_dim * self.dir_number, 2 * lstm_hidden_dim * self.dir_number),
+                  nn.Dropout(self.dropout_p),
+                  nn.Sigmoid(),
+                  nn.Linear(2 * lstm_hidden_dim * self.dir_number, num_modes)]
+        self.proj_p_to_log_pis = nn.Sequential(*layers)
+
+        layers = [nn.Linear(3 * lstm_hidden_dim * self.dir_number, 3 * lstm_hidden_dim * self.dir_number),
+                  nn.Dropout(self.dropout_p),
+                  nn.Sigmoid(),
+                  nn.Linear(3 * lstm_hidden_dim * self.dir_number, num_modes)]
+        self.proj_to_GMM_log_pis = nn.Sequential(*layers)
+        # self.proj_to_GMM_log_pis = nn.Linear(lstm_hidden_dim * 3 * self.dir_number, num_modes)
+
+        layers = [nn.Linear(num_modes * 2, num_modes * 2), nn.Dropout(self.dropout_p), nn.Sigmoid(),
+                  nn.Linear(num_modes * 2, num_modes * 2)]
+        self.proj_to_GMM_mus = nn.Sequential(*layers)
+        # self.proj_to_GMM_mus = nn.Linear(num_modes * 2, num_modes * 2)
+
+        layers = [nn.Linear(num_modes * 2, num_modes * 2), nn.Dropout(self.dropout_p), nn.Sigmoid(),
+                  nn.Linear(num_modes * 2, num_modes * 2)]
+        self.proj_to_GMM_log_sigmas = nn.Sequential(*layers)
+        # self.proj_to_GMM_log_sigmas = nn.Linear(num_modes * 2, num_modes * 2)
+
         self.proj_to_GMM_corrs = nn.Linear(num_modes * 2, num_modes)
         self.proj_z_to_log_pi = nn.Linear(num_modes, num_modes)
-        self.dropout_p = dropout_p
+
 
     def project_to_gmm_params(self, tensor) -> (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor):
         """
@@ -162,15 +189,16 @@ class CvaeFuture(nn.Module):
         lstm_out_acc, hid = self.node_hist_encoder_acc(acc)  # lstm_out shape num_peds, timestamps,  2*hidden_dim
         lstm_out_vell, hid = self.node_hist_encoder_vel(vel)  # lstm_out shape num_peds, timestamps,  2*hidden_dim
         lstm_out_poses, hid = self.node_hist_encoder_poses(poses)
+
         # lstm_out = self.bn1(lstm_out_vell + lstm_out_poses + lstm_out_acc)
         # lstm_out = self.ln1(F.dropout(self.ln1(lstm_out_vell + lstm_out_poses + lstm_out_acc), self.dropout_p))
-        # lstm_out = F.dropout((lstm_out_vell + lstm_out_poses + lstm_out_acc), self.dropout_p)
-        lstm_out = F.dropout((lstm_out_poses), self.dropout_p)
+        lstm_out = F.dropout((lstm_out_vell + lstm_out_poses + lstm_out_acc), self.dropout_p)
+        # lstm_out = F.dropout((lstm_out_poses), self.dropout_p)
 
         y_e = None
         if train:
             future_enc, hid = self.node_future_encoder(future)
-            y_e = future_enc[:, -1, :]
+            y_e = F.dropout(future_enc[:, -1, :], self.dropout_p)
 
         # np, data_dim = current_pose.shape
         # stacked = current_pose.flatten().repeat(np).reshape(np, np * data_dim)
@@ -237,7 +265,7 @@ class CvaeFuture(nn.Module):
             # z = q_logits
             kl_separated = D.kl_divergence(q_distrib, p_distrib)
             # kl_lower_bounded = torch.clamp(, min=0.1, max=1e3)
-            kl = torch.clamp(torch.sum(kl_separated), min=0.01, max=1e10)  # - torch.sum(q_distrib.entropy())
+            kl = torch.clamp(torch.sum(kl_separated), min=0.001, max=1e10)  # - torch.sum(q_distrib.entropy())
         else:
             z = sample(p_distrib)
             # z = p_logits
@@ -255,12 +283,13 @@ class CvaeFuture(nn.Module):
         current_state = current_state.unsqueeze(1)
         gauses = []
         lp = to_one_hot(z, n_dims=self.num_modes).to(encoded_history.device)
-        lp = lp - torch.logsumexp(lp, dim=-1, keepdim=True)
+        # lp = z.reshape(bs, 1) * torch.ones(bs, self.num_modes).cuda()
         inp = F.dropout(torch.cat((encoded_history.reshape(bs, -1), a_0, lp), dim=-1), self.dropout_p)
 
         for i in range(12):
             # h_state = self.ln4(self.gru(inp.reshape(bs, -1), state))
-            input = self.gru_prep(inp.reshape(bs, -1))
+            input = inp.reshape(bs, -1)
+            # input = self.gru_prep(inp.reshape(bs, -1))
             h_state = self.gru(input, state)
             # h_state = self.bn4(self.gru(inp.reshape(bs, -1), state))
 
@@ -275,7 +304,6 @@ class CvaeFuture(nn.Module):
             variance = torch.clamp(torch.exp(log_sigmas).unsqueeze(2) ** 2, max=1e3, min=1e-3)
 
             m_diag = variance * torch.eye(2).to(variance.device)
-            m_diag += 1e-7 #num stab?
             sigma_xy = torch.clamp(torch.prod(torch.exp(log_sigmas), dim=-1), min=1e-3, max=1e3)
 
             if train:
@@ -299,7 +327,8 @@ class CvaeFuture(nn.Module):
             a_t = gmm.sample()  # TODO possible grad problems?
             a_tt = F.dropout(self.action(a_t.reshape(bs, -1)), self.dropout_p)
             state = h_state
-            input = self.gru_prep(torch.cat((encoded_history.reshape(bs, -1), a_tt, lp), dim=-1))
+            # input = self.gru_prep(torch.cat((encoded_history.reshape(bs, -1), a_tt, lp), dim=-1))
+            input = torch.cat((encoded_history.reshape(bs, -1), a_tt, lp), dim=-1)
             inp = F.dropout(input, self.dropout_p)
         return gauses
 

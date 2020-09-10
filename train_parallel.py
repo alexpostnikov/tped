@@ -24,6 +24,9 @@ import io
 import PIL.Image
 from torchvision.transforms import ToTensor
 
+STD_KOEF = 0.01
+DROPOUT = 0.0
+DIST_KOEF = 0.01
 
 # def plot(predictions, gt):
 #     num_peds = gt.shape[1]
@@ -164,7 +167,7 @@ def train_pose_vel(model: torch.nn.Module, training_generator: DataLoader,
 
     optimizer = optim.Adam(model.parameters(), lr=lr)
     drop_every_epochs = 1
-    drop_rate = 0.9
+    drop_rate = 0.95
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, drop_every_epochs,
                                                 drop_rate)  # drop_every_epochs epochs drop by drop_rate lr
     writer = None
@@ -229,7 +232,7 @@ def train_pose_vel(model: torch.nn.Module, training_generator: DataLoader,
             epoch_loss_kl += kl
 
             means = get_mean_prediction_multiple_timestamps(prediction)
-            distance_loss = torch.sum((means - gt[:, 8:, 2:4])**2 * mask)
+            distance_loss = torch.dist(means* mask, gt[:, 8:, 2:4] * mask)
             loss_stdved = 0.5 * torch.sum(torch.cat(([prediction[i].stddev for i in range(12)])))
             epoch_loss_std += loss_stdved
 
@@ -239,7 +242,7 @@ def train_pose_vel(model: torch.nn.Module, training_generator: DataLoader,
                                               l2_d=distance_loss)
             pbar.set_description(info)
             kl_weight = min((10*epoch+1)/100.0, 1.0)
-            loss = 0.01 * loss_nll + kl_weight * kl + 0.01 * loss_stdved + 0*distance_loss
+            loss = 0.01 * loss_nll + kl_weight * kl + STD_KOEF * loss_stdved + DIST_KOEF*distance_loss
 
             loss.backward()
 
@@ -354,20 +357,20 @@ def visualize_model_weights(epoch, model, writer):
     weights = torch.cat([model.gru.weight_hh.data.flatten(), model.gru.weight_ih.data.flatten()])
     writer.add_histogram(f"model/gru", weights, epoch)
     # ########## LINEAR ##################
-    weights = model.action.weight.data.flatten().detach().cpu()
-    writer.add_histogram(f"model/action", weights, epoch)
-    weights = model.state.weight.data.flatten().detach().cpu()
-    writer.add_histogram(f"model/state", weights, epoch)
-    weights = model.proj_p_to_log_pis.weight.data.flatten().detach().cpu()
-    writer.add_histogram(f"model/proj_p_to_log_pis", weights, epoch)
-    weights = model.proj_to_GMM_log_pis.weight.data.flatten().detach().cpu()
-    writer.add_histogram(f"model/proj_to_GMM_log_pis", weights, epoch)
-    weights = model.proj_to_GMM_mus.weight.data.flatten().detach().cpu()
-    writer.add_histogram(f"model/proj_to_GMM_mus", weights, epoch)
-    weights = model.proj_to_GMM_log_sigmas.weight.data.flatten().detach().cpu()
-    writer.add_histogram(f"model/proj_to_GMM_log_sigmas", weights, epoch)
-    weights = model.proj_to_GMM_corrs.weight.data.flatten().detach().cpu()
-    writer.add_histogram(f"model/proj_to_GMM_corrs", weights, epoch)
+    # weights = model.action.weight.data.flatten().detach().cpu()
+    # writer.add_histogram(f"model/action", weights, epoch)
+    # weights = model.state.weight.data.flatten().detach().cpu()
+    # writer.add_histogram(f"model/state", weights, epoch)
+    # weights = model.proj_p_to_log_pis.weight.data.flatten().detach().cpu()
+    # writer.add_histogram(f"model/proj_p_to_log_pis", weights, epoch)
+    # weights = model.proj_to_GMM_log_pis.weight.data.flatten().detach().cpu()
+    # writer.add_histogram(f"model/proj_to_GMM_log_pis", weights, epoch)
+    # weights = model.proj_to_GMM_mus.weight.data.flatten().detach().cpu()
+    # writer.add_histogram(f"model/proj_to_GMM_mus", weights, epoch)
+    # weights = model.proj_to_GMM_log_sigmas.weight.data.flatten().detach().cpu()
+    # writer.add_histogram(f"model/proj_to_GMM_log_sigmas", weights, epoch)
+    # weights = model.proj_to_GMM_corrs.weight.data.flatten().detach().cpu()
+    # writer.add_histogram(f"model/proj_to_GMM_corrs", weights, epoch)
 
 
 if __name__ == "__main__":
@@ -390,7 +393,9 @@ if __name__ == "__main__":
     dev = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print("starting training on ", dev)
 
-    net = CvaeFuture(lstm_hidden_dim=64, num_layers=1, bidir=True, dropout_p=0.0, num_modes=30).to(dev)
-    net.name += "_woSTD_"
+    net = CvaeFuture(lstm_hidden_dim=64, num_layers=1, bidir=True, dropout_p=DROPOUT, num_modes=30).to(dev)
+
+    net.name += "_STD"+str(STD_KOEF)+"_D"+str(DROPOUT)+"_DIST"+str(DIST_KOEF)+"_"
+    print("model name: ", net.name)
     train_pose_vel(net, training_gen, test_gen, num_epochs=300, device=dev, lr=0.005,
                    limit=1e100, logging=True)
