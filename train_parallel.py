@@ -398,4 +398,4 @@ if __name__ == "__main__":
     net.name += "_STD"+str(STD_KOEF)+"_D"+str(DROPOUT)+"_DIST"+str(DIST_KOEF)+"_"
     print("model name: ", net.name)
     train_pose_vel(net, training_gen, test_gen, num_epochs=300, device=dev, lr=0.005,
-                   limit=1e100, logging=True)
+                   limit=1e100, logging=False)

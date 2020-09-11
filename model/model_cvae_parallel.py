@@ -229,7 +229,14 @@ class CvaeFuture(nn.Module):
         # if self.hyperparams['edge_state_combine_method'] == 'sum':
         # Used in Structural-RNN to combine edges as well.
         op_applied_edge_states_list = list()
-        for neighbors_state in neighbors:
+        for id, neighbors_state in enumerate(neighbors):
+            # if len(neighbors_state) > 0:
+            #     clothest_id = torch.argmin(
+            #         torch.sum(((neighbors_state.cpu()[:, :, 0:2] - node_history_st[id, :, 0:2].cpu()) ** 2)[:, :, 0],
+            #                   dim=-1))
+            #     op_applied_edge_states_list.append(neighbors_state[clothest_id].to(node_history_st.device) - node_history_st[id])
+            # else:
+            #     op_applied_edge_states_list.append(torch.zeros(8, 6).to(node_history_st.device))
             op_applied_edge_states_list.append(torch.sum(neighbors_state, dim=0))
         combined_neighbors = torch.stack(op_applied_edge_states_list, dim=0).to(node_history_st.device)
 
@@ -284,7 +291,8 @@ class CvaeFuture(nn.Module):
         gauses = []
         lp = to_one_hot(z, n_dims=self.num_modes).to(encoded_history.device)
         # lp = z.reshape(bs, 1) * torch.ones(bs, self.num_modes).cuda()
-        inp = F.dropout(torch.cat((encoded_history.reshape(bs, -1), a_0, lp), dim=-1), self.dropout_p)
+        # lp = z
+        inp = F.dropout(torch.cat((encoded_history.reshape(bs, -1), a_0, 0*lp), dim=-1), self.dropout_p)
 
         for i in range(12):
             # h_state = self.ln4(self.gru(inp.reshape(bs, -1), state))
@@ -309,6 +317,7 @@ class CvaeFuture(nn.Module):
             if train:
                 # log_pis = z.reshape(bs, 1) * torch.ones(bs, self.num_modes).cuda()
                 log_pis = to_one_hot(z, n_dims=self.num_modes).to(encoded_history.device)
+
                 # log_pis = z
 
             else:
@@ -328,7 +337,7 @@ class CvaeFuture(nn.Module):
             a_tt = F.dropout(self.action(a_t.reshape(bs, -1)), self.dropout_p)
             state = h_state
             # input = self.gru_prep(torch.cat((encoded_history.reshape(bs, -1), a_tt, lp), dim=-1))
-            input = torch.cat((encoded_history.reshape(bs, -1), a_tt, lp), dim=-1)
+            input = torch.cat((encoded_history.reshape(bs, -1), a_tt, 0*lp), dim=-1)
             inp = F.dropout(input, self.dropout_p)
         return gauses
 
