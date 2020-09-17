@@ -1,6 +1,13 @@
+from typing import Tuple
+
 import torch
 import numpy as np
 from scipy.stats import gaussian_kde
+
+from dataloader_parallel import is_filled
+from datetime import datetime
+import os
+from torch.utils.tensorboard import SummaryWriter
 
 magic_number = 0
 
@@ -69,3 +76,34 @@ def compare_prediction_gt(prediction, gt):
     # error_dict -> {'id':[num_ped],'ade': [num_ped], 'fde': [num_ped], 'kde': [num_ped]}
     return error_dict
 
+
+def get_batch_is_filled_mask(batch: torch.Tensor) -> Tuple[torch.Tensor, int]:
+    """
+    :param batch:  batch with shape bs, num_peds, seq, data_shape, currently works only with bs = 1
+    :return: mask shape num_people, seq, data_shape with 0 filled data if person is not fully observable during seq
+    """
+    # assert batch.shape[0] == 1
+
+    num_peds = batch.shape[0]
+    mask = torch.zeros(num_peds, 12, 2)
+    full_peds = 0
+    for ped in range(num_peds):
+        if is_filled(batch[ped]):
+            mask[ped] = torch.ones(12, 2)
+            full_peds += 1
+    return mask, full_peds
+
+
+
+def setup_experiment(title: str, logdir: str = "./tb") -> Tuple[SummaryWriter, str, str, str]:
+    """
+    :param title: name of experiment
+    :param logdir: tb logdir
+    :return: writer object,  modified experiment_name, best_model path
+    """
+    experiment_name = "{}@{}".format(title, datetime.now().strftime("%d.%m.%Y-%H:%M:%S"))
+    folder_path = os.path.join(logdir, experiment_name)
+    writer = SummaryWriter(log_dir=folder_path)
+
+    best_model_path = f"{folder_path}/{experiment_name}+best.pth"
+    return writer, experiment_name, best_model_path, folder_path

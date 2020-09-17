@@ -47,11 +47,16 @@ def plot_prob_big(gt, gmm, ped_num, save=False, device="cpu"):
                     # if abs(y[j] - gt[8 + t, 1]) < 2:
                     #     prob[j][i] += torch.exp(gmm[t].log_prob(torch.tensor([x[i], y[j]]).cuda())[ped_num])
 
-    prob = torch.clamp(prob, max=2)
+    # prob = torch.clamp(prob, max=2)
 
     #(gt[:,0] - x.mean())/(torch.max(x) - torch.min(x)) * (len(x)) + (len(x)/2.0)
     gt[:, 0] = (gt[:, 0] - x.mean())/(torch.max(x) - torch.min(x)) * (len(x)) + (len(x)/2.0)
     gt[:, 1] = (gt[:, 1] - y.mean())/(torch.max(y) - torch.min(y)) * (len(y)) + (len(y)/2.0)
+
+    pred_means = torch.stack([gmm[i].mean for i in range(12)])[:, ped_num, :]
+    pred_means[:, 0] = (pred_means[:, 0] - x.mean()) / (torch.max(x) - torch.min(x)) * (len(x)) + (len(x) / 2.0)
+    pred_means[:, 1] = (pred_means[:, 1] - y.mean()) / (torch.max(y) - torch.min(y)) * (len(y)) + (len(y) / 2.0)
+
 
     fig, ax = plt.subplots(1, figsize=(18, 18))
     ax.set_xticks(np.round(np.linspace(0, len(x), 6), 1))
@@ -63,6 +68,7 @@ def plot_prob_big(gt, gmm, ped_num, save=False, device="cpu"):
     ax.plot(gt[:, 0].detach().cpu(), gt[:, 1].detach().cpu())
     ax.plot(gt[:, 0].detach().cpu(), gt[:, 1].detach().cpu(), "bo")
     ax.plot(gt[8:, 0].detach().cpu(), gt[8:, 1].detach().cpu(), 'ro')
+    ax.plot(pred_means[:, 0].detach().cpu(), pred_means[:, 1].detach().cpu(), 'm*')
     ax.imshow(prob.detach().cpu().numpy())
     if save:
         plt.savefig("./visualisations/traj_dirtr/"+str(counter)+".jpg", )
@@ -201,8 +207,8 @@ def visualize_single(model, gen, device="cuda"):
 
 
 def visualize_single_parallel(model, gen, device="cpu"):
-    for batch_id, local_batch in enumerate(gen):
 
+    for batch_id, local_batch in enumerate(gen):
         x, neighbours = local_batch
         x = x.to(device)
         gt = x.clone()
@@ -211,9 +217,9 @@ def visualize_single_parallel(model, gen, device="cpu"):
 
         x = x[:, :, 2:8]
         prediction = model(x[:, :, 0:6], neighbours, train=False)
-        gt_prob = torch.cat(([prediction[i].log_prob(gt[:, 8 + i, 2:4]) for i in range(12)])).reshape(-1, 12)
+
         num_peds = x.shape[0]
-        # predictions = torch.cat([prediction[i].mean for i in range(12)]).reshape(12, -1, 2).permute(1, 0, 2)
+
         for ped_num in range(num_peds):
             if is_filled(x[ped_num, :8, :]):
 
@@ -227,6 +233,8 @@ if __name__ == "__main__":
 
     training_set = DatasetFromPkl("/home/robot/repos/trajectory-prediction/processed_with_forces/",
                                   data_files=["eth_train.pkl"])
+
+
     training_generator = torch.utils.data.DataLoader(training_set, batch_size=2, collate_fn=collate_fn, shuffle=True)
 
     test_set = DatasetFromPkl("/home/robot/repos/trajectory-prediction/processed_with_forces/",

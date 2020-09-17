@@ -7,7 +7,6 @@ from tqdm import tqdm
 
 
 def find_next_data_by_index(index, dataset):
-
     self_data = dataset[index]
     last_seen_timestamp = dataset[index][1].item()
     end_ts = last_seen_timestamp + 20
@@ -22,21 +21,29 @@ def find_next_data_by_index(index, dataset):
     return n_history_tensor, last_seen_timestamp
 
 
-def get_neighbours_history(neighbours_indexes, data, start_timestamp):
+def get_neighbours_history(neighbours_indexes, data, start_timestamp, neig_goals=False):
 
-    end_timestamp = start_timestamp + 8
+    if neig_goals:
+        end_timestamp = start_timestamp + 20
+    else:
+        end_timestamp = start_timestamp + 8
     n_history_tensor = torch.zeros(len(neighbours_indexes), 8, 14)
-
+    n_goal_tensor = torch.zeros(len(neighbours_indexes), 2)
     for i, person_id in enumerate(neighbours_indexes):
+
         neighbour = data[
             torch.where((data[:, 1] >= start_timestamp) * (data[:, 1] < end_timestamp) * (data[:, 0] == person_id))]
         if len(neighbour) > 0:
             num_missed_ts_from_start = int(neighbour[0, 1] - start_timestamp)
-            n_history_tensor[i][num_missed_ts_from_start:num_missed_ts_from_start + len(neighbour)] = neighbour
-    return n_history_tensor
+            n_history_tensor[i][num_missed_ts_from_start:num_missed_ts_from_start + min(8, len(neighbour))] = neighbour[:8-num_missed_ts_from_start, :]
+            n_goal_tensor[i] = neighbour[-1, 2:4]
+    if neig_goals:
+        return n_history_tensor, n_goal_tensor
+    else:
+        return n_history_tensor
 
 
-def get_peds(index, dataset: List):
+def get_peds(index, dataset: List, return_neig_goals=False):
     """
     return stacked torch tensor of scene in specified timestamps from specified dataset.
     if at any given timestamp person is not found at dataset, but later (previously) will appear,
@@ -70,10 +77,15 @@ def get_peds(index, dataset: List):
             break
     pass
     neighbours_indexes.remove(self_index)
-    neighbours_history = get_neighbours_history(list(neighbours_indexes), dataset,
-                                                start)
+    if return_neig_goals:
+        neighbours_history, neig_goals = get_neighbours_history(list(neighbours_indexes), dataset,
+                                                                start, return_neig_goals)
+        return [person_history, neighbours_history, neig_goals]
+    else:
+        neighbours_history = get_neighbours_history(list(neighbours_indexes), dataset,
+                                                    start, return_neig_goals)
 
-    return person_history, neighbours_history
+        return [person_history, neighbours_history]
 
 
 def get_peds_indexes_in_timestamp(person: List):
@@ -114,7 +126,7 @@ class DatasetFromPkl(Dataset):
     """
 
     def __init__(self, data_folder: str, data_files: Union[str, List[str]] = "all",
-                 train: bool = True, test: bool = False, validate: bool = False):
+                 train: bool = True, test: bool = False, validate: bool = False, neig_goals=False):
         """
         :param data_folder: path to folder with preprocessed pkl files
         :param data_files: list of files to be used or "all"
@@ -125,6 +137,7 @@ class DatasetFromPkl(Dataset):
 
         super().__init__()
         self.train_dataset = torch.tensor([])
+        self.neig_goals = neig_goals
         file_list = []
         if "all" not in data_files:
             file_list = data_files
@@ -155,6 +168,7 @@ class DatasetFromPkl(Dataset):
             for index, sub_dataset in enumerate(self.data[key]):
                 self.data_length += len(sub_dataset) - 20
                 self.dataset_indeces[self.data_length] = [key, index]
+        # self.data_length -= 1
         data_dim = sub_dataset.shape[-1]
 
         self.processed_history = torch.zeros(self.data_length, 20, data_dim)
@@ -199,18 +213,24 @@ class DatasetFromPkl(Dataset):
     def __getitem__(self, index: int):
         [file, sub_dataset], index_in_sub_dataset = self.get_dataset_from_index(index)
 
+        # if already loaded
         if not torch.any(self.processed_history[index] != torch.zeros_like(self.processed_history[index])):
 
+            # if exist in file:
             if os.path.isfile("preprocessed/"
-                              + file[:file.index(".")] + str(sub_dataset) + ".pt"):
+                              + file[:file.index(".")] + str(sub_dataset) + ".pt") and \
+                    not self.neig_goals:
                 data = self.load_from_preprocessed(file, sub_dataset, index_in_sub_dataset)
                 return data
-
-            self.packed_data = []  # num_samples * 20 * numped * 8
-            data = get_peds(index_in_sub_dataset, self.data[file][sub_dataset])
-            self.processed_history[index] = data[0]
-            self.processed_neighbors[index] = data[1]
-            return data
+            else:
+                self.packed_data = []  # num_samples * 20 * numped * 8
+                data = get_peds(index_in_sub_dataset, self.data[file][sub_dataset], self.neig_goals)
+                if self.neig_goals:
+                    last_self_non_zero = data[0][torch.where(data[0][:, 0] != 0)][-1:, 2:4]
+                    data[2] = torch.cat([last_self_non_zero, data[2]])
+                self.processed_history[index] = data[0]
+                self.processed_neighbors[index] = data[1]
+                return data
         else:
             data = [self.processed_history[index], self.processed_neighbors[index]]
             return data
@@ -244,8 +264,11 @@ def is_filled(data):
 
 if __name__ == "__main__":
     pass
-    # dataset = DatasetFromPkl("/home/robot/repos/trajectory-prediction/processed_with_forces/",
-    #                          data_files=["eth_train.pkl"])  # , "zara2_test.pkl"]
+    dataset = DatasetFromPkl("/home/robot/repos/trajectory-prediction/processed_with_forces/",
+                             data_files=["eth_train.pkl"], neig_goals=True)  # , "zara2_test.pkl"]
+    for i in tqdm(range(len(dataset))):
+        a = dataset[i]
+
     # # dataset.save_preprocessed()
     # print(len(dataset))
     # t = dataset[0]

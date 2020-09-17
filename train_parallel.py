@@ -1,18 +1,16 @@
 import time
-from datetime import datetime
 from typing import Tuple, Union
 import os
 
 import torch
 import torch.optim as optim
 import torch.distributions as D
-from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
 from dataloader_parallel import DatasetFromPkl, is_filled, collate_fn
 from model.model_cvae_parallel import CvaeFuture
 from visualize import visualize_single_parallel
-from utils import compare_prediction_gt
+from utils import compare_prediction_gt, setup_experiment
 
 from google_drive_downloader import GoogleDriveDownloader as gdd
 import matplotlib.pyplot as plt
@@ -42,18 +40,6 @@ DIST_KOEF = 0.01
 #             plt.show()
 
 
-def setup_experiment(title: str, logdir: str = "./tb") -> Tuple[SummaryWriter, str, str, str]:
-    """
-    :param title: name of experiment
-    :param logdir: tb logdir
-    :return: writer object,  modified experiment_name, best_model path
-    """
-    experiment_name = "{}@{}".format(title, datetime.now().strftime("%d.%m.%Y-%H:%M:%S"))
-    folder_path = os.path.join(logdir, experiment_name)
-    writer = SummaryWriter(log_dir=folder_path)
-
-    best_model_path = f"{folder_path}/{experiment_name}+best.pth"
-    return writer, experiment_name, best_model_path, folder_path
 
 
 def get_ml_prediction_single_timestamp(gmm: D.MixtureSameFamily):
@@ -398,4 +384,4 @@ if __name__ == "__main__":
     net.name += "_STD"+str(STD_KOEF)+"_D"+str(DROPOUT)+"_DIST"+str(DIST_KOEF)+"_"
     print("model name: ", net.name)
     train_pose_vel(net, training_gen, test_gen, num_epochs=300, device=dev, lr=0.005,
-                   limit=1e100, logging=False)
+                   limit=1e100, logging=True)

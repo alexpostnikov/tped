@@ -9,20 +9,15 @@ import torch.distributions as D
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
-from dataloader_parallel import DatasetFromPkl, is_filled, collate_fn
+from dataloader_parallel import DatasetFromPkl, collate_fn
 from model.endpoind_model import EndPointPred
-from visualize import visualize_single_parallel
-from utils import compare_prediction_gt
+from utils import compare_prediction_gt, get_batch_is_filled_mask
 
 from google_drive_downloader import GoogleDriveDownloader as gdd
-import matplotlib.pyplot as plt
 
 from typing import List
 import tqdm
 import shutil
-import io
-import PIL.Image
-from torchvision.transforms import ToTensor
 
 STD_KOEF = 0.01
 DROPOUT = 0.1
@@ -131,23 +126,6 @@ def get_ade_fde_vel(generator: DataLoader, model: torch.nn.Module, limit: int = 
     return ade, fde, torch.flatten(torch.cat(nll, dim=0))
 
 
-def get_batch_is_filled_mask(batch: torch.Tensor) -> Tuple[torch.Tensor, int]:
-    """
-    :param batch:  batch with shape bs, num_peds, seq, data_shape, currently works only with bs = 1
-    :return: mask shape num_people, seq, data_shape with 0 filled data if person is not fully observable during seq
-    """
-    # assert batch.shape[0] == 1
-
-    num_peds = batch.shape[0]
-    mask = torch.zeros(num_peds, 12, 2)
-    full_peds = 0
-    for ped in range(num_peds):
-        if is_filled(batch[ped]):
-            mask[ped] = torch.ones(12, 2)
-            full_peds += 1
-    return mask, full_peds
-
-
 def train_endp(model: torch.nn.Module, training_generator: DataLoader,
                    test_generator: DataLoader, num_epochs: int, device: torch.device,
                    lr: Union[int, float] = 0.02, limit: Union[int, float] = 10e7, validate: bool = True, logging=False):
@@ -165,7 +143,7 @@ def train_endp(model: torch.nn.Module, training_generator: DataLoader,
     :return:
     """
 
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=0.05)
     drop_every_epochs = 1
     drop_rate = 0.95
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, drop_every_epochs,

@@ -255,7 +255,8 @@ class EndPointPred(nn.Module):
             #     op_applied_edge_states_list.append(neighbors_state[clothest_id].to(node_history_st.device) - node_history_st[id])
             # else:
             #     op_applied_edge_states_list.append(torch.zeros(8, 6).to(node_history_st.device))
-            op_applied_edge_states_list.append(torch.sum(neighbors_state, dim=0))
+
+            op_applied_edge_states_list.append(torch.sum(neighbors_state, dim=0)) # TODO: - self pose?
         combined_neighbors = torch.stack(op_applied_edge_states_list, dim=0).to(node_history_st.device)
 
         joint_history = torch.cat([combined_neighbors, node_history_st], dim=-1)
