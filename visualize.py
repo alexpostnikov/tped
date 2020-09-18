@@ -32,7 +32,7 @@ def plot_prob_big(gt, gmm, ped_num, save=True, device="cpu", add_map=False,times
     if add_map:
         video = cv2.VideoCapture("./resources/seq_eth.avi")
         if timestamp is not None:
-            video.set(cv2.CAP_PROP_POS_FRAMES, timestamp[0,1])
+            video.set(cv2.CAP_PROP_POS_FRAMES, timestamp[0,0])
         ret, frame = video.read()
         H = np.array([[2.8128700e-02,   2.0091900e-03,  -4.6693600e+00],
                     [8.0625700e-04,   2.5195500e-02,  -5.0608800e+00],
