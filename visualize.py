@@ -8,9 +8,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import io
 import time
+import cv2
 
 import matplotlib.pyplot as plt
-
 
 def plot_prob(gt, gmm, ped_num):
     fig, ax = plt.subplots(4, 3, figsize=(18, 18))
@@ -24,46 +24,92 @@ def plot_prob(gt, gmm, ped_num):
 
 counter = 0
 
-def plot_prob_big(gt, gmm, ped_num, save=False, device="cpu"):
+def plot_prob_big(gt, gmm, ped_num, save=True, device="cpu", add_map=False,timestamp = None):
     global counter
-
-    x = torch.arange(torch.min(gt[8:, 0]) - 2, torch.max(gt[8:, 0]) + 2, 0.1).to(device)
-    y = torch.arange(torch.min(gt[8:, 1]) - 2, torch.max(gt[8:, 1]) + 2, 0.1).to(device)
-    # gmm = gmm.to(device)
+    # k=24
+    xp = torch.arange(torch.min(gt[8:, 0]) - 2, torch.max(gt[8:, 0]) + 2, 0.05).to(device)
+    yp = torch.arange(torch.min(gt[8:, 1]) - 2, torch.max(gt[8:, 1]) + 2, 0.05).to(device)
+    if add_map:
+        video = cv2.VideoCapture("./resources/seq_eth.avi")
+        if timestamp is not None:
+            video.set(cv2.CAP_PROP_POS_FRAMES, timestamp[0,1])
+        ret, frame = video.read()
+        H = np.array([[2.8128700e-02,   2.0091900e-03,  -4.6693600e+00],
+                    [8.0625700e-04,   2.5195500e-02,  -5.0608800e+00],
+                    [3.4555400e-04,   9.2512200e-05,   4.6255300e-01]])
+        Hi = np.linalg.inv(H)
+        k=28
+        x = torch.arange(0., frame.shape[0]).to(device)
+        y = torch.arange(0., frame.shape[1]).to(device)
     gt = gt.to(device)
-    prob = torch.zeros_like(y[None].T * x).to(device)
+    prob = torch.zeros_like(yp[None].T * xp).to(device)
     for t in range(12):
-        # for i in range(len(x)):
-        #     if abs(x[i] - gt[8+t, 0]) < 2:
-        #         for j in range(len(y)):
-        X1 = x.unsqueeze(0)
-        Y1 = y.unsqueeze(1)
-        X2 = X1.repeat(y.shape[0], 1)
-        Y2 = Y1.repeat(1, x.shape[0])
+        X1 = xp.unsqueeze(0)
+        Y1 = yp.unsqueeze(1)
+        X2 = X1.repeat(yp.shape[0], 1)
+        Y2 = Y1.repeat(1, xp.shape[0])
         Z = torch.stack([X2, Y2]).permute(1, 2, 0)
         Z = Z.reshape(-1, 2)
         ll = gmm[t].log_prob(Z.unsqueeze(1))[:, ped_num]
-        prob += torch.exp(ll).reshape(y.shape[0], x.shape[0])
-                    # if abs(y[j] - gt[8 + t, 1]) < 2:
-                    #     prob[j][i] += torch.exp(gmm[t].log_prob(torch.tensor([x[i], y[j]]).cuda())[ped_num])
-
+        prob += torch.exp(ll).reshape(yp.shape[0], xp.shape[0])
     prob = torch.clamp(prob, max=2)
-
-    #(gt[:,0] - x.mean())/(torch.max(x) - torch.min(x)) * (len(x)) + (len(x)/2.0)
-    gt[:, 0] = (gt[:, 0] - x.mean())/(torch.max(x) - torch.min(x)) * (len(x)) + (len(x)/2.0)
-    gt[:, 1] = (gt[:, 1] - y.mean())/(torch.max(y) - torch.min(y)) * (len(y)) + (len(y)/2.0)
-
+    # gtn = np.array(gt)
+    # for i in range(len(gtn)):
+    #     gtn[i] = (Hi@np.array([gtn[i][1],gtn[i][0],1]))[:2]
+    # temp = gtn.copy()
+    # gtn[:, 0] =  640-temp[:, 0]
+    if add_map:
+        temp = gt.clone()
+        gt[:, 0] =  temp[:, 1]
+        gt[:, 1] =  temp[:, 0]
+        
+        gt[:, 0] = (gt[:, 0] + frame.shape[1]/k/2)*k
+        gt[:, 1] = (gt[:, 1] + frame.shape[0]/k/2)*k
+    else:
+        gt[:, 0] = (gt[:, 0] - xp.mean())/(torch.max(xp) - torch.min(xp)) * (len(xp)) + (len(xp)/2.0)
+        gt[:, 1] = (gt[:, 1] - yp.mean())/(torch.max(yp) - torch.min(yp)) * (len(yp)) + (len(yp)/2.0)
     fig, ax = plt.subplots(1, figsize=(18, 18))
-    ax.set_xticks(np.round(np.linspace(0, len(x), 6), 1))
-    ax.set_yticks(np.round(np.linspace(0, len(y), 6), 1))
+    ax.set_xticks(np.round(np.linspace(0, len(xp), 6), 1))
+    ax.set_yticks(np.round(np.linspace(0, len(yp), 6), 1))
     ax.set_xticklabels(
-        np.round(((torch.linspace(0, len(x), 6) * (torch.max(x) - torch.min(x)) / len(x) + torch.min(x)).numpy()), 1))
+        np.round(((torch.linspace(0, len(xp), 6) * (torch.max(xp) - torch.min(xp)) / len(xp) + torch.min(xp)).numpy()), 1))
     ax.set_yticklabels(
-        np.round((((torch.linspace(0, len(x), 6)) * (torch.max(x) - torch.min(x)) / len(y) + torch.min(y)).numpy()), 1))
-    ax.plot(gt[:, 0].detach().cpu(), gt[:, 1].detach().cpu())
-    ax.plot(gt[:, 0].detach().cpu(), gt[:, 1].detach().cpu(), "bo")
-    ax.plot(gt[8:, 0].detach().cpu(), gt[8:, 1].detach().cpu(), 'ro')
-    ax.imshow(prob.detach().cpu().numpy())
+        np.round((((torch.linspace(0, len(xp), 6)) * (torch.max(xp) - torch.min(xp)) / len(yp) + torch.min(yp)).numpy()), 1))
+    # ax.plot(gtn[:, 0], gtn[:, 1])
+    # ax.plot(gtn[:, 0], gtn[:, 1], "bo")
+    # ax.plot(gtn[8:, 0], gtn[8:, 1], 'ro')
+    ax.plot(gt[:, 0], gt[:, 1])
+    ax.plot(gt[:, 0], gt[:, 1], "b*")
+    ax.plot(gt[8:, 0], gt[8:, 1], "r*")
+    p1 = [9999,9999]
+    p2 = [0,0]
+    if add_map:
+        for i in range(len(xp)):
+            for j in  range(len(yp)):
+                try:
+                    xf = int((xp[i] + frame.shape[0]/k/2)*k)
+                    yf = int((yp[j] + frame.shape[1]/k/2)*k)
+                    xf = max([xf,0])
+                    xf = min([xf,frame.shape[0]])
+                    yf = max([yf,0])
+                    yf = min([yf,frame.shape[1]])
+                    p1[0]=min([xf,p1[0]])
+                    p1[1]=min([yf,p1[1]])
+                    p2[0]=max([xf,p2[0]])
+                    p2[1]=max([yf,p2[1]])
+                    # xf = int((Hi@np.array([xp[i][1],xp[i][0],1]))[:2])
+                    # yf = int((Hi@np.array([yp[j][1],yp[j][0],1]))[:2])
+                    # yf = int((yp[j] + frame.shape[1]/k/2)*k)
+                    
+                    frame[xf][yf][0] = prob[j][i]*127#(max 2 to 254)
+                    frame[xf][yf][1] *= 0.1 #G
+                    frame[xf][yf][2] *= 0.1 #B
+                except:
+                    pass
+        frame[p1[0]:p2[0],p1[1]:p2[1]] = cv2.blur(frame[p1[0]:p2[0],p1[1]:p2[1]],(10,10))
+        ax.imshow(frame)
+    else:
+        ax.imshow(prob.detach().cpu())
     if save:
         plt.savefig("./visualisations/traj_dirtr/"+str(counter)+".jpg", )
         plt.close()
@@ -218,18 +264,18 @@ def visualize_single_parallel(model, gen, device="cpu"):
             if is_filled(x[ped_num, :8, :]):
 
                 if not torch.any(torch.norm(gt[ped_num, 8:, 2:4], dim=-1) == torch.tensor([0]).to(device)):
-                    ax = plot_prob_big(gt[ped_num, :, 2:4], prediction, ped_num, device=device)
+                    ax = plot_prob_big(gt[ped_num, :, 2:4], prediction, ped_num, device=device,add_map=False ,timestamp = gt[ped_num, :, 0:2])
                     return ax
 
 
 
 if __name__ == "__main__":
 
-    training_set = DatasetFromPkl("/home/robot/repos/trajectory-prediction/processed_with_forces/",
+    training_set = DatasetFromPkl("resources/processed_with_forces/",
                                   data_files=["eth_train.pkl"])
     training_generator = torch.utils.data.DataLoader(training_set, batch_size=2, collate_fn=collate_fn, shuffle=True)
 
-    test_set = DatasetFromPkl("/home/robot/repos/trajectory-prediction/processed_with_forces/",
+    test_set = DatasetFromPkl("resources/processed_with_forces/",
                               data_files=["eth_test.pkl"])
     test_generator = torch.utils.data.DataLoader(test_set, batch_size=12, shuffle=True, collate_fn=collate_fn)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -237,7 +283,7 @@ if __name__ == "__main__":
     print(device)
     model = CvaeFuture(lstm_hidden_dim=64, num_layers=1, bidir=True, dropout_p=0.0, num_modes=30).to(device)
     model.load_state_dict(torch.load(
-        "/home/robot/repos/trajectory-prediction/tb/CvaeFuture_parallel_no_ent0.005_hd_64_ed_0_nl_1@21.08.2020-15:43:15/model.pth"))
+        "resources/model.pth",map_location=torch.device('cpu')))
 
 
     start = time.time()
